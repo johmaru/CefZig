@@ -8,11 +8,21 @@ pub fn build(b: *std.Build) void {
     
     const optimize = b.standardOptimizeOption(.{});
 
+    const websocket_options = b.addOptions();
+    websocket_options.addOption(bool, "websocket_blocking", false);
+
+    const websocket_deps = b.allocator.create(std.Build.Module.Import) catch unreachable;
+    websocket_deps.* = .{
+        .name = "build",
+        .module = websocket_options.createModule(),
+    };
+
     const websocket_mod = b.addModule("websocket", .{
         .root_source_file = b.path("websocket.zig/src/websocket.zig"),
-        .target = target,
-        .optimize = optimize,
+        .imports = &[_]std.Build.Module.Import{websocket_deps.*},
     });
+
+    websocket_mod.addOptions("build", websocket_options);
 
     const exe_mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
@@ -28,9 +38,6 @@ pub fn build(b: *std.Build) void {
         .root_module = exe_mod,
     });
 
-    // Using LibCurl
-
-    exe.linkSystemLibrary2("curl", .{ .preferred_link_mode = .static, });
     exe.linkLibC();
 
     b.installArtifact(exe);
@@ -38,9 +45,6 @@ pub fn build(b: *std.Build) void {
     const exe_unit_tests = b.addTest(.{
         .root_module = exe_mod,
     });
-
-    exe_unit_tests.linkSystemLibrary2("curl", .{ .preferred_link_mode = .static, });
-    exe_unit_tests.linkLibC();
 
     const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
 
