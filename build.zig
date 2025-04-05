@@ -10,6 +10,7 @@ pub fn build(b: *std.Build) void {
 
     const websocket_options = b.addOptions();
     websocket_options.addOption(bool, "websocket_blocking", false);
+    websocket_options.addOption(bool, "websocket_no_delay", true);
 
     const websocket_deps = b.allocator.create(std.Build.Module.Import) catch unreachable;
     websocket_deps.* = .{

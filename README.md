@@ -2,11 +2,16 @@
 
 ## How to use
 
-Now this library features has only  get a debbuger title
+Now this library features has 
+- Navigate a Url
+- Move Mouse Cursor on Chromium
+- Click Javascript Element
+- Click on Mouse Cursor Element
+- TypeText
 Anyway here the test code
 
 ```zig
- // Set the console output to UTF-8
+   // Set the console output to UTF-8
     if (builtin.os.tag == .windows) {
        _ = std.os.windows.kernel32.SetConsoleOutputCP(65001);
     }
@@ -35,6 +40,7 @@ Anyway here the test code
         .port = 9222,
         .url = BrowserDevToolsUrl.chromium_url,
         .session_id = "123456",
+        .headless = false,
     });
 
     // run the browser
@@ -43,26 +49,9 @@ Anyway here the test code
         return err;
     };
 
-    // wait for the browser to start
-    std.time.sleep(2 * std.time.ns_per_s);
-
-
-    // get the debugger url
-    const url = try getDebuggerUrl(allocator, 9222);
-    defer allocator.free(url);
-
    defer browser.deinit() catch |err| {
         std.debug.print("Error deinitializing browser: {s}\n", .{@errorName(err)});
     };
-
-    std.debug.print("Debugger URL: {s}\n", .{url});
-
-
-    // must be in the format ws://localhost:9222/devtools/browser/<session_id>
-    browser.websocket.url = url;
-
-    // connect to the websocket
-    try browser.websocket.connect();
 
     // add an event listener for the OnJSEval event
     try browser.addEventListener(EventType.OnJSEval, onJSResult);
@@ -70,6 +59,12 @@ Anyway here the test code
     // evaluate some js
     const result = try browser.evaluateJS(allocator, "document.title");
     defer allocator.free(result);
+
+    // navigate to a url
+    browser.navigate(allocator, "https://www.google.co.jp/") catch |err| {
+        std.debug.print("Error navigating: {s}\n", .{@errorName(err)});
+        return err;
+    };
 
     // dispatch the event
     try browser.dispatchEvent(.OnJSEval, result);
