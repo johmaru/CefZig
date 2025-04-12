@@ -1,3 +1,7 @@
 .zig-cache*
 chromium.zip
 chromium/*
+FeatureList.txt
+.idea*
+zig-out/*
+*.zip

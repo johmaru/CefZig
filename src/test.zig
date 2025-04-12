@@ -1,17 +1,4 @@
-# CEFZIG
-
-## How to use
-
-Now this library features has 
-- Navigate a Url
-- Move Mouse Cursor on Chromium
-- Click Javascript Element
-- Click on Mouse Cursor Element
-- TypeText
-Anyway here the test code
-
-```zig
-   const std = @import("std");
+﻿const std = @import("std");
 const cef = @import("cef.zig");
 const builtin = @import("builtin");
 
@@ -101,4 +88,3 @@ pub fn main() !void {
     std.debug.print("Test run complete\n", .{});
 
 }
-```
