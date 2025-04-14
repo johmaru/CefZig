@@ -11,7 +11,7 @@ Now this library features has
 Anyway here the test code
 
 ```zig
-   const std = @import("std");
+const std = @import("std");
 const cef = @import("cef.zig");
 const builtin = @import("builtin");
 
@@ -48,7 +48,6 @@ pub fn main() !void {
         .headless = false,
         .auto_open_devtools = true,
     });
-
     // run the browser
     browser.run() catch |err| {
         std.debug.print("Error: {s}\n", .{@errorName(err)});
@@ -96,6 +95,23 @@ pub fn main() !void {
         std.time.sleep(1 * std.time.ns_per_s);
     }
 
+    browser.clickElement(browser.websocket.allocator, "gLFyf") catch |err| {
+        std.debug.print("Error clicking element: {s}\n", .{@errorName(err)});
+    };
+
+    std.time.sleep(500 * std.time.ns_per_ms);
+
+    browser.typeText(browser.websocket.allocator, "test") catch |err| {
+        std.debug.print("Error typing text: {s}\n", .{@errorName(err)});
+        return err;
+    };
+
+
+    var timeout2:u64 = 0;
+    while (timeout2 < 5) : (timeout2 += 1) {
+        std.debug.print("Waiting for 1 second...\n", .{});
+        std.time.sleep(1 * std.time.ns_per_s);
+    }
     
     std.debug.print("Browser closed\n", .{});
     std.debug.print("Test run complete\n", .{});
