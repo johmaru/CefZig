@@ -548,7 +548,7 @@ pub const ChromiumBrowser = struct {
     }
 
     /// Evaluate JavaScript code in the browser context
-    pub fn evaluateJS(self: *Self, allocator: std.mem.Allocator,expression: []const u8) ![]const u8 {
+    pub fn evaluateJS(self: *Self, allocator: std.mem.Allocator,expression: []const u8,settings: EvaluateJSSettings) ![]const u8 {
        if (!self.websocket.is_connected) return error.NotConnected;
 
         if (self.websocket.socket == null) {
@@ -560,8 +560,6 @@ pub const ChromiumBrowser = struct {
 
         std.time.sleep(50 * std.time.ns_per_ms);
         
-        self.websocket_mutex.lock();
-        defer self.websocket_mutex.unlock();
 
         if (self.websocket.socket == null) {
             return error.WebSocketDisconnected;
@@ -577,30 +575,60 @@ pub const ChromiumBrowser = struct {
         );
         defer allocator.free(message);
 
-        try self.websocket.socket.?.write(message);
+        self.nonBlockingWrite(self.websocket.allocator, message) catch |err| {
+            std.debug.print("Error writing to WebSocket: {s}\n", .{@errorName(err)});
+            return err;
+        };
+
+        if (!settings.wait_for_response) {
+            std.debug.print("evaluateJS: No wait for response, returning immediately\n", .{});
+            return "";
+        }
 
         const start_time = std.time.milliTimestamp();
-        const timeout_ms = 5000;
+        const timeout_ms = settings.wait_for_timeout;
     
         while (std.time.milliTimestamp() - start_time < timeout_ms) {
-            if (try self.websocket.socket.?.read()) |response| {
-                var parsed = try std.json.parseFromSlice(std.json.Value, allocator, response.data, .{});
+           while (true) {
+                const response_opt = self.getNextMessage() catch |err| {
+                    std.debug.print("Error getting next message: {s}\n", .{@errorName(err)});
+                    break;
+                };
+               
+
+                if (response_opt == null) {
+                    std.debug.print("No message received, continuing...\n", .{});
+                    break;
+                }
+
+                const response = response_opt.?;
+
+                 if (response.data.len == 0) {
+                    std.debug.print("Received empty message data in evaluateJS\n", .{});
+                    continue;
+                }
+
+                var parsed = std.json.parseFromSlice(std.json.Value, allocator, response.data, .{}) catch |parse_err| {
+                    std.debug.print("JSON parse error in evaluateJS: {s}\nData: {s}\n", .{@errorName(parse_err), response.data});
+                    continue;
+                };
                 defer parsed.deinit();
+
             
-            if (parsed.value.object.get("id")) |id| {
-                if (id.integer == message_id) {
-                    if (parsed.value.object.get("result")) |result| {
-                        if (result.object.get("result")) |inner_result| {
-                            if (inner_result.object.get("value")) |value| {
-                                return allocator.dupe(u8, value.string);
+                if (parsed.value.object.get("id")) |id| {
+                    if (id.integer == message_id) {
+                        if (parsed.value.object.get("result")) |result| {
+                            if (result.object.get("result")) |inner_result| {
+                                if (inner_result.object.get("value")) |value| {
+                                    return allocator.dupe(u8, value.string);
+                                }
                             }
                         }
+                        continue;
                     }
-                    return error.InvalidResponse;
                 }
-            }
-        }
-        std.time.sleep(100 * std.time.ns_per_ms);
+           }
+        std.time.sleep(settings.wait_for_interval * std.time.ns_per_ms);
     }
         return error.Timeout;
     }
@@ -616,7 +644,7 @@ pub const ChromiumBrowser = struct {
             \\console.log('Quit handler injected. Call window.__ZIG_QUIT() to exit');
         ;
     
-        _ = try self.evaluateJS(allocator, js_code);
+        _ = try self.evaluateJS(allocator, js_code,.{});
     }
 
     /// Inject a quit handler without locking the WebSocket connection
@@ -1340,28 +1368,34 @@ pub const ChromiumBrowser = struct {
     }
 
     pub fn mouseClick(self: *Self, allocator: std.mem.Allocator, x: f64, y: f64) !void {
+
         const message_id = self.next_message_id;
         self.next_message_id += 1;
-
+        
         {
-            const down_msg = try std.fmt.allocPrint(
+            const js_code = comptime  getJSExpressionTemplate(.MouseClickDown);
+            const js_cmd = try std.fmt.allocPrint(
                 allocator, 
-                "{{\"id\":{d},\"method\":\"Input.dispatchMouseEvent\",\"params\":{{\"type\":\"mousePressed\",\"x\":{d},\"y\":{d},\"button\":\"left\",\"clickCount\":1}}}}", 
-                .{message_id, x, y}
+                js_code, 
+                .{message_id,x, y}
             );
-            defer allocator.free(down_msg);
-            try self.websocket.socket.?.write(down_msg);
+            defer allocator.free(js_cmd);
+            _ = try self.evaluateJS(allocator, js_cmd,.{
+                .wait_for_response = false,
+            });
         }
 
         {
-            const up_msg = try std.fmt.allocPrint(
+            const js_code = comptime  getJSExpressionTemplate(.MouseClickUp);
+            const js_cmd = try std.fmt.allocPrint(
                 allocator, 
-                "{{\"id\":{d},\"method\":\"Input.dispatchMouseEvent\",\"params\":{{\"type\":\"mouseReleased\",\"x\":{d},\"y\":{d},\"button\":\"left\",\"clickCount\":1}}}}",  
+                js_code, 
                 .{message_id, x, y}
             );
-            self.next_message_id += 1;
-            defer allocator.free(up_msg);
-            try self.websocket.socket.?.write(up_msg);
+            defer allocator.free(js_cmd);
+            _ = try self.evaluateJS(allocator, js_cmd,.{
+                .wait_for_response = false,
+            });
         }
     }
 
@@ -1369,25 +1403,32 @@ pub const ChromiumBrowser = struct {
         const message_id = self.next_message_id;
         self.next_message_id += 1;
 
-        const message = try std.fmt.allocPrint(
+        const js_code = comptime  getJSExpressionTemplate(.TypeText);
+        const js_cmd = try std.fmt.allocPrint(
             allocator, 
-            "{{\"id\":{d},\"method\":\"Input.insertText\",\"params\":{{\"text\":\"{s}\"}}}}",  
-            .{message_id, text}
+            js_code, 
+            .{message_id,text}
         );
-        defer allocator.free(message);
+        defer allocator.free(js_cmd);
 
-        try self.websocket.socket.?.write(message);
+        self.nonBlockingWrite(self.websocket.allocator, js_cmd) catch |err| {
+            std.debug.print("Error during non-blocking write: {s}\n", .{@errorName(err)});
+            return err;
+        };
     }
 
     pub fn clickElement(self: *Self, allocator: std.mem.Allocator, selector: []const u8) !void {
+        const js_code = comptime getJSExpressionTemplate(.ClickElement);
         const js_cmd = try std.fmt.allocPrint(
             allocator, 
-            "document.querySelector(\"{s}\").click();", 
+            js_code, 
             .{selector}
         );
         defer allocator.free(js_cmd);
 
-        _ = try self.evaluateJS(allocator, js_cmd);
+        _ = try self.evaluateJS(allocator, js_cmd,.{
+            .wait_for_response = false,
+        });
     }
 
 };
@@ -1400,6 +1441,32 @@ pub const BrowserSettings = struct {
     headless: ?bool = true,
     auto_open_devtools: ?bool = false,
 };
+
+pub const EvaluateJSSettings = struct {
+    wait_for_response: bool = true,
+    wait_for_timeout: u32 = 5000,
+    wait_for_interval: u32 = 100,
+};
+
+pub const JSType = enum {
+    QuitHandler,
+    ClickElement,
+    TypeText,
+    MouseClickDown,
+    MouseClickUp,
+    Navigate,
+};
+
+pub fn getJSExpressionTemplate(js_code: JSType) []const u8 {
+    return switch (js_code) {
+        .QuitHandler => "window.close();",
+        .ClickElement => "document.querySelector(\"{s}\").click();",
+        .TypeText => "{{\"id\":{d},\"method\":\"Input.insertText\",\"params\":{{\"text\":\"{s}\"}}}}",
+        .MouseClickDown => "{{\"id\":{d},\"method\":\"Input.dispatchMouseEvent\",\"params\":{{\"type\":\"mousePressed\",\"x\":{d},\"y\":{d},\"button\":\"left\",\"clickCount\":1}}}}",
+        .MouseClickUp => "{{\"id\":{d},\"method\":\"Input.dispatchMouseEvent\",\"params\":{{\"type\":\"mouseReleased\",\"x\":{d},\"y\":{d},\"button\":\"left\",\"clickCount\":1}}}}", 
+        .Navigate => "window.location.href = \"{s}\";",
+    };
+}
 
 pub const BrowserState = struct {
     tab: std.ArrayList(usize),
